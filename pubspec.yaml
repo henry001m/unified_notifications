@@ -1,7 +1,8 @@
 name: unified_notifications
 description: "Unified notification SDK for Flutter using FCM, APNs and MQTT (EMQX)."
 version: 1.0.0
-homepage:
+homepage: https://github.com/henry001m/unified_notifications
+repository: https://github.com/henry001m/unified_notifications.git
 
 environment:
   sdk: ^3.11.4
