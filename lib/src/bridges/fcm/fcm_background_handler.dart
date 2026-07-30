@@ -1,20 +1,16 @@
-import 'dart:convert';
 import 'dart:ui';
 
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart';
-import 'package:hive/hive.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../contracts/notification_store.dart';
 import '../../core/notification_normalizer.dart';
+import '../../core/notification_visibility.dart';
 import '../../models/notification_source.dart';
 import '../../render/local_notification_renderer.dart';
 import '../../sdk/background_bootstrap.dart';
-import '../../storage/hive_notification_store.dart';
-import '../../storage/notification_store_keys.dart';
 import '../../storage/shared_prefs_notification_store.dart';
 import '../../utils/json_utils.dart';
 
@@ -47,58 +43,38 @@ Future<void> unifiedNotificationsFirebaseBackgroundHandler(
     payload,
     source: NotificationSource.fcmBackground,
   );
+  final hiddenOwn = isHiddenOwnNotificationEvent(event);
 
-  if (config.hiveInboxEnabled) {
-    try {
-      final dir = await getApplicationDocumentsDirectory();
-      Hive.init(dir.path);
-      await Hive.openBox('notificaciones_box');
-    } catch (_) {}
-  }
-
-  final NotificationStore store = config.hiveInboxEnabled
-      ? HiveNotificationStore(boxName: 'notificaciones_box')
-      : SharedPrefsNotificationStore(window: config.deduplicationWindow);
+  final NotificationStore store =
+      SharedPrefsNotificationStore(window: config.deduplicationWindow);
 
   try {
     await store.enqueuePendingEvent(event);
   } catch (_) {}
-  try {
-    await store.saveInboxEvent(event);
-  } catch (_) {}
-
-  final prefs = await SharedPreferences.getInstance();
-  final recentDeliveredRaw =
-      prefs.getString(NotificationStoreKeys.recentlyDeliveredEventIds);
-  final recentDelivered = <String, int>{};
-  if (recentDeliveredRaw != null && recentDeliveredRaw.isNotEmpty) {
+  if (!hiddenOwn) {
     try {
-      final decoded = jsonDecode(recentDeliveredRaw);
-      if (decoded is Map) {
-        for (final entry in decoded.entries) {
-          recentDelivered[entry.key.toString()] = (entry.value as num).toInt();
-        }
-      }
+      await store.saveInboxEvent(event);
     } catch (_) {}
   }
 
-  final now = DateTime.now();
-  recentDelivered.removeWhere(
-    (_, timestamp) =>
-        now.difference(DateTime.fromMillisecondsSinceEpoch(timestamp)) >
-        const Duration(minutes: 10),
-  );
-
-  final shouldSkip = recentDelivered.containsKey(event.eventId);
-  recentDelivered[event.eventId] = now.millisecondsSinceEpoch;
-  await prefs.setString(
-    NotificationStoreKeys.recentlyDeliveredEventIds,
-    jsonEncode(recentDelivered),
-  );
-
-  if (!shouldSkip && config.enableSystemNotifications) {
-    final renderer = LocalNotificationRenderer(config: config);
-    await renderer.initialize();
-    await renderer.show(event);
+  if (!hiddenOwn &&
+      config.enableSystemNotifications &&
+      (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS)) {
+    try {
+      final renderer = LocalNotificationRenderer(config: config);
+      await renderer.initialize();
+      await renderer.show(event);
+    } catch (error) {
+      debugPrint(
+        '[FCM BG] No se pudo mostrar la notificación local en background: $error',
+      );
+    }
+  } else if (!hiddenOwn &&
+      !kIsWeb &&
+      defaultTargetPlatform == TargetPlatform.iOS) {
+    debugPrint(
+      '[FCM BG] Render local omitido en iOS para evitar duplicado con la push remota del sistema | '
+      'event_id=${event.eventId} | group_key=${event.groupKey}',
+    );
   }
 }

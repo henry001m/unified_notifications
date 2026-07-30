@@ -23,10 +23,14 @@ class NotificacionServiceImpl implements NotificacionService {
       final json = <String, dynamic>{
         'usr_subscripcion_id': subscripcionId,
         'usr_onesignal_id': oneSignalId,
-        if (usrProduccionIphone != null) 'usr_produccion_iphone': usrProduccionIphone,
-        if (usrFcmToken != null) 'usr_fcm_token': usrFcmToken,
-        if (usrApnsToken != null) 'usr_apns_token': usrApnsToken,
       };
+      _agregarSiNoEsNull(
+        json,
+        'usr_produccion_iphone',
+        usrProduccionIphone,
+      );
+      _agregarSiNoEsNull(json, 'usr_fcm_token', usrFcmToken);
+      _agregarSiNoEsNull(json, 'usr_apns_token', usrApnsToken);
 
       final url = Uri.parse('$baseUrl/$_subscriptionEndpoint');
       await http.post(
@@ -36,6 +40,16 @@ class NotificacionServiceImpl implements NotificacionService {
       );
     } catch (e) {
       // Log error but don't throw - notifications sync is non-critical
+    }
+  }
+
+  void _agregarSiNoEsNull(
+    Map<String, dynamic> json,
+    String key,
+    Object? value,
+  ) {
+    if (value != null) {
+      json[key] = value;
     }
   }
 }

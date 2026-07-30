@@ -35,14 +35,19 @@ class LifecycleCoordinator with WidgetsBindingObserver {
     switch (state) {
       case AppLifecycleState.resumed:
         unawaited(onResumed());
+        return;
       case AppLifecycleState.inactive:
         unawaited(onInactive?.call() ?? onBackgrounded());
+        return;
       case AppLifecycleState.paused:
         unawaited(onPaused?.call() ?? onBackgrounded());
+        return;
       case AppLifecycleState.hidden:
         unawaited(onBackgrounded());
+        return;
       case AppLifecycleState.detached:
         unawaited(onDetached?.call() ?? onBackgrounded());
+        return;
     }
   }
 }

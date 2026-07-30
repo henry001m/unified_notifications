@@ -11,7 +11,6 @@ import '../models/unified_notification_event.dart';
 import '../render/local_notification_renderer.dart';
 import '../storage/hive_notification_store.dart';
 import '../storage/shared_prefs_notification_store.dart';
-import 'background_notification_service.dart';
 import 'notification_runtime.dart';
 import 'unified_notification_sdk.dart';
 
@@ -40,7 +39,7 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
     final store = config.hiveInboxEnabled
         ? HiveNotificationStore(boxName: 'notificaciones_box')
         : SharedPrefsNotificationStore(window: config.deduplicationWindow)
-            as NotificationStore;
+              as NotificationStore;
 
     final mqttBridge = MqttBridge(config: config.mqtt);
     final fcmBridge = config.enableFcm ? FcmBridge() : null;
@@ -57,7 +56,6 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
     );
     _runtime = runtime;
     await runtime.initialize();
-    await BackgroundNotificationService.instance.initialize();
 
     _mqttMessageSub?.cancel();
     _mqttConnectedSub?.cancel();
@@ -65,10 +63,12 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
     _allEventsSub?.cancel();
 
     _mqttMessageSub = mqttBridge.onMessage.listen(_mqttMessageController.add);
-    _mqttConnectedSub =
-        mqttBridge.onConnected.listen((_) => _mqttConnectedController.add(null));
-    _mqttDisconnectedSub =
-        mqttBridge.onDisconnected.listen((_) => _mqttDisconnectedController.add(null));
+    _mqttConnectedSub = mqttBridge.onConnected.listen(
+      (_) => _mqttConnectedController.add(null),
+    );
+    _mqttDisconnectedSub = mqttBridge.onDisconnected.listen(
+      (_) => _mqttDisconnectedController.add(null),
+    );
     _allEventsSub = runtime.onAllEvents.listen(_allEventsController.add);
   }
 
@@ -104,12 +104,6 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
 
   @override
   Future<String?> getFcmToken() => _safeRuntime.getFcmToken();
-
-  @override
-  Future<String?> getOneSignalId() async => null;
-
-  @override
-  Future<String?> getOneSignalSubscripcionId() async => null;
 
   @override
   Future<List<NotificationGroup>> getGroupedInbox() {
@@ -181,6 +175,14 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
   @override
   Stream<UnifiedNotificationEvent> get onAllEvents =>
       _allEventsController.stream;
+
+  List<UnifiedNotificationEvent> consumePendingReceivedForSubscribers() {
+    return _safeRuntime.takePendingReceivedForSubscribers();
+  }
+
+  List<UnifiedNotificationEvent> consumePendingOpenedForSubscribers() {
+    return _safeRuntime.takePendingOpenedForSubscribers();
+  }
 
   @override
   Future<void> subscribeToTopic(String topic) {

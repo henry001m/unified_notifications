@@ -30,6 +30,11 @@ class HiveNotificationStore implements NotificationStore {
     final inbox = await getInbox();
     final filtered = inbox.where((item) => item.groupKey != groupKey).toList();
     await _writeInbox(filtered);
+
+    final pending = await _readEventList(_pendingKey);
+    final filteredPending =
+        pending.where((item) => item.groupKey != groupKey).toList();
+    await _writeEventList(_pendingKey, filteredPending);
   }
 
   @override
@@ -68,6 +73,10 @@ class HiveNotificationStore implements NotificationStore {
     final inbox = await getInbox();
     final updated = inbox.map((item) => item.markAsRead()).toList();
     await _writeInbox(updated);
+
+    final pending = await _readEventList(_pendingKey);
+    final pendingUpdated = pending.map((item) => item.markAsRead()).toList();
+    await _writeEventList(_pendingKey, pendingUpdated);
   }
 
   @override
@@ -81,6 +90,20 @@ class HiveNotificationStore implements NotificationStore {
 
   @override
   Future<void> markOpened(String eventId) async {
+    final inbox = await getInbox();
+    final index = inbox.indexWhere((item) => item.eventId == eventId);
+    if (index != -1 && !inbox[index].isRead) {
+      inbox[index] = inbox[index].markAsRead();
+      await _writeInbox(inbox);
+    }
+
+    final pending = await _readEventList(_pendingKey);
+    final pendingIndex = pending.indexWhere((item) => item.eventId == eventId);
+    if (pendingIndex != -1) {
+      pending[pendingIndex] = pending[pendingIndex].markAsRead();
+      await _writeEventList(_pendingKey, pending);
+    }
+
     await registerOpened(eventId);
   }
 
@@ -97,8 +120,15 @@ class HiveNotificationStore implements NotificationStore {
   @override
   Future<void> saveInboxEvent(UnifiedNotificationEvent event) async {
     final events = await _readEventList(_inboxKey);
+    final existingIndex = events.indexWhere((item) => item.eventId == event.eventId);
+    final existing = existingIndex == -1 ? null : events[existingIndex];
+    final normalizedEvent =
+        existing != null && existing.isRead && !event.isRead
+            ? event.markAsRead()
+            : event;
+
     events.removeWhere((item) => item.eventId == event.eventId);
-    events.add(event);
+    events.add(normalizedEvent);
     events.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
     await _writeInbox(events);
   }

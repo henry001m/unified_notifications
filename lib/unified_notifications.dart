@@ -12,9 +12,6 @@ export 'src/models/notification_token_bundle.dart';
 export 'src/models/unified_notification_event.dart';
 export 'src/sdk/unified_notification_sdk.dart';
 export 'src/sdk/unified_notifications.dart';
-export 'src/sdk/background_notification_service.dart'
-    show BackgroundNotificationService,
-        unifiedNotificationsBackgroundEntryPoint;
 export 'src/services/fcm_token_service.dart';
 export 'src/services/apns_token_service.dart';
 export 'src/services/notificacion_service_impl.dart';

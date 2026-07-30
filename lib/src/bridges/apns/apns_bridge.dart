@@ -13,8 +13,9 @@ import '../../models/unified_notification_event.dart';
 class ApnsBridge implements PushBridge {
   ApnsBridge();
 
-  static const MethodChannel _channel =
-      MethodChannel('app.notificaciones/apns');
+  static const MethodChannel _channel = MethodChannel(
+    'app.notificaciones/apns',
+  );
   static const int _maxRetryAttempts = 3;
 
   final _normalizer = const NotificationNormalizer();
@@ -41,8 +42,7 @@ class ApnsBridge implements PushBridge {
       _openedController.stream;
 
   @override
-  Stream<NotificationTokenBundle> get onTokenRefresh =>
-      _tokenController.stream;
+  Stream<NotificationTokenBundle> get onTokenRefresh => _tokenController.stream;
 
   @override
   Future<String?> getApnsToken() async {
@@ -96,8 +96,16 @@ class ApnsBridge implements PushBridge {
     await _refreshToken();
   }
 
-  late final WidgetsBindingObserver _lifecycleObserver =
-      _ApnsLifecycleObserver(this);
+  late final WidgetsBindingObserver _lifecycleObserver = _ApnsLifecycleObserver(
+    this,
+  );
+
+  Future<PendingApnsEvents> consumePendingNativeEventsSynchronously() async {
+    return _drainPendingApnsEvents(
+      emitToStreams: false,
+      bufferAsPending: false,
+    );
+  }
 
   Future<void> _markFlutterReady() async {
     try {
@@ -122,9 +130,7 @@ class ApnsBridge implements PushBridge {
       final normalized = token?.trim();
       if (normalized != null && normalized.isNotEmpty) {
         _resetRetryState();
-        _tokenController.add(
-          NotificationTokenBundle(apnsToken: normalized),
-        );
+        _tokenController.add(NotificationTokenBundle(apnsToken: normalized));
       }
     } on MissingPluginException {
       _scheduleRetry('getApnsToken');
@@ -134,12 +140,23 @@ class ApnsBridge implements PushBridge {
   }
 
   Future<void> _consumePendingApnsEvents() async {
+    await _drainPendingApnsEvents(emitToStreams: true, bufferAsPending: true);
+  }
+
+  Future<PendingApnsEvents> _drainPendingApnsEvents({
+    required bool emitToStreams,
+    required bool bufferAsPending,
+  }) async {
+    final received = <UnifiedNotificationEvent>[];
+    final opened = <UnifiedNotificationEvent>[];
+
     try {
-      final pendingEvents =
-          await _channel.invokeMethod<List<dynamic>>(
-            'consumePendingApnsEvents',
-          );
-      if (pendingEvents == null || pendingEvents.isEmpty) return;
+      final pendingEvents = await _channel.invokeMethod<List<dynamic>>(
+        'consumePendingApnsEvents',
+      );
+      if (pendingEvents == null || pendingEvents.isEmpty) {
+        return PendingApnsEvents(received: received, opened: opened);
+      }
       for (final rawEvent in pendingEvents) {
         if (rawEvent is! Map) continue;
         final event = Map<String, dynamic>.from(rawEvent);
@@ -147,12 +164,32 @@ class ApnsBridge implements PushBridge {
         final payload = event['payload'];
         if (payload is! Map) continue;
         if (method == 'onApnsNotificationReceived') {
-          _emitReceived(Map<String, dynamic>.from(payload));
+          final normalized = _normalizeReceived(
+            Map<String, dynamic>.from(payload),
+          );
+          received.add(normalized);
+          if (bufferAsPending) {
+            _pendingReceived.add(normalized);
+          }
+          if (emitToStreams) {
+            _foregroundController.add(normalized);
+          }
         } else if (method == 'onApnsNotificationOpened') {
-          _emitOpened(Map<String, dynamic>.from(payload));
+          final normalized = _normalizeOpened(
+            Map<String, dynamic>.from(payload),
+          );
+          opened.add(normalized);
+          if (bufferAsPending) {
+            _pendingOpened.add(normalized);
+          }
+          if (emitToStreams) {
+            _openedController.add(normalized);
+          }
         }
       }
     } catch (_) {}
+
+    return PendingApnsEvents(received: received, opened: opened);
   }
 
   Future<void> _handleMethodCall(MethodCall call) async {
@@ -161,23 +198,17 @@ class ApnsBridge implements PushBridge {
         final token = call.arguments?.toString().trim();
         if (token != null && token.isNotEmpty) {
           _resetRetryState();
-          _tokenController.add(
-            NotificationTokenBundle(apnsToken: token),
-          );
+          _tokenController.add(NotificationTokenBundle(apnsToken: token));
         }
         break;
       case 'onApnsNotificationReceived':
         if (call.arguments is Map) {
-          _emitReceived(
-            Map<String, dynamic>.from(call.arguments as Map),
-          );
+          _emitReceived(Map<String, dynamic>.from(call.arguments as Map));
         }
         break;
       case 'onApnsNotificationOpened':
         if (call.arguments is Map) {
-          _emitOpened(
-            Map<String, dynamic>.from(call.arguments as Map),
-          );
+          _emitOpened(Map<String, dynamic>.from(call.arguments as Map));
         }
         break;
       case 'onApnsRegistrationFailed':
@@ -187,21 +218,29 @@ class ApnsBridge implements PushBridge {
   }
 
   void _emitReceived(Map<String, dynamic> payload) {
-    final event = _normalizer.normalize(
-      payload,
-      source: NotificationSource.apnsForeground,
-    );
+    final event = _normalizeReceived(payload);
     _pendingReceived.add(event);
     _foregroundController.add(event);
   }
 
   void _emitOpened(Map<String, dynamic> payload) {
-    final event = _normalizer.normalize(
+    final event = _normalizeOpened(payload);
+    _pendingOpened.add(event);
+    _openedController.add(event);
+  }
+
+  UnifiedNotificationEvent _normalizeReceived(Map<String, dynamic> payload) {
+    return _normalizer.normalize(
+      payload,
+      source: NotificationSource.apnsForeground,
+    );
+  }
+
+  UnifiedNotificationEvent _normalizeOpened(Map<String, dynamic> payload) {
+    return _normalizer.normalize(
       payload,
       source: NotificationSource.apnsOpened,
     );
-    _pendingOpened.add(event);
-    _openedController.add(event);
   }
 
   void _scheduleRetry(String source) {
@@ -231,6 +270,7 @@ class ApnsBridge implements PushBridge {
     _pendingOpened.clear();
     return items;
   }
+
 }
 
 class _ApnsLifecycleObserver with WidgetsBindingObserver {
@@ -244,4 +284,14 @@ class _ApnsLifecycleObserver with WidgetsBindingObserver {
       unawaited(_bridge._consumePendingApnsEvents());
     }
   }
+}
+
+class PendingApnsEvents {
+  const PendingApnsEvents({
+    this.received = const <UnifiedNotificationEvent>[],
+    this.opened = const <UnifiedNotificationEvent>[],
+  });
+
+  final List<UnifiedNotificationEvent> received;
+  final List<UnifiedNotificationEvent> opened;
 }

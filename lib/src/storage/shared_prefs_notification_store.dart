@@ -11,13 +11,23 @@ class SharedPrefsNotificationStore implements NotificationStore {
 
   final Duration window;
 
+  Future<SharedPreferences> _prefs({bool reload = false}) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (reload) {
+      await prefs.reload();
+    }
+    return prefs;
+  }
+
   @override
   Future<void> clearAll() async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs();
     await prefs.remove(NotificationStoreKeys.inbox);
     await prefs.remove(NotificationStoreKeys.pending);
     await prefs.remove(NotificationStoreKeys.delivered);
     await prefs.remove(NotificationStoreKeys.opened);
+    await prefs.remove(NotificationStoreKeys.displayedIdsByGroup);
+    await prefs.remove(NotificationStoreKeys.recentlyDeliveredEventIds);
   }
 
   @override
@@ -25,12 +35,17 @@ class SharedPrefsNotificationStore implements NotificationStore {
     final inbox = await getInbox();
     final filtered = inbox.where((item) => item.groupKey != groupKey).toList();
     await _writeEventList(NotificationStoreKeys.inbox, filtered);
+
+    final pending = await _readEventList(NotificationStoreKeys.pending);
+    final filteredPending =
+        pending.where((item) => item.groupKey != groupKey).toList();
+    await _writeEventList(NotificationStoreKeys.pending, filteredPending);
   }
 
   @override
   Future<List<UnifiedNotificationEvent>> drainPendingEvents() async {
     final events = await _readEventList(NotificationStoreKeys.pending);
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs();
     await prefs.remove(NotificationStoreKeys.pending);
     return events;
   }
@@ -65,6 +80,10 @@ class SharedPrefsNotificationStore implements NotificationStore {
     final inbox = await getInbox();
     final updated = inbox.map((item) => item.markAsRead()).toList();
     await _writeEventList(NotificationStoreKeys.inbox, updated);
+
+    final pending = await _readEventList(NotificationStoreKeys.pending);
+    final pendingUpdated = pending.map((item) => item.markAsRead()).toList();
+    await _writeEventList(NotificationStoreKeys.pending, pendingUpdated);
   }
 
   @override
@@ -78,6 +97,20 @@ class SharedPrefsNotificationStore implements NotificationStore {
 
   @override
   Future<void> markOpened(String eventId) async {
+    final inbox = await getInbox();
+    final index = inbox.indexWhere((item) => item.eventId == eventId);
+    if (index != -1 && !inbox[index].isRead) {
+      inbox[index] = inbox[index].markAsRead();
+      await _writeEventList(NotificationStoreKeys.inbox, inbox);
+    }
+
+    final pending = await _readEventList(NotificationStoreKeys.pending);
+    final pendingIndex = pending.indexWhere((item) => item.eventId == eventId);
+    if (pendingIndex != -1) {
+      pending[pendingIndex] = pending[pendingIndex].markAsRead();
+      await _writeEventList(NotificationStoreKeys.pending, pending);
+    }
+
     await registerOpened(eventId);
   }
 
@@ -94,8 +127,15 @@ class SharedPrefsNotificationStore implements NotificationStore {
   @override
   Future<void> saveInboxEvent(UnifiedNotificationEvent event) async {
     final events = await _readEventList(NotificationStoreKeys.inbox);
+    final existingIndex = events.indexWhere((item) => item.eventId == event.eventId);
+    final existing = existingIndex == -1 ? null : events[existingIndex];
+    final normalizedEvent =
+        existing != null && existing.isRead && !event.isRead
+            ? event.markAsRead()
+            : event;
+
     events.removeWhere((item) => item.eventId == event.eventId);
-    events.add(event);
+    events.add(normalizedEvent);
     events.sort((a, b) => b.receivedAt.compareTo(a.receivedAt));
     await _writeEventList(NotificationStoreKeys.inbox, events);
   }
@@ -111,7 +151,7 @@ class SharedPrefsNotificationStore implements NotificationStore {
   }
 
   Future<List<UnifiedNotificationEvent>> _readEventList(String key) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs(reload: true);
     final raw = prefs.getString(key);
     if (raw == null || raw.isEmpty) return <UnifiedNotificationEvent>[];
     try {
@@ -134,7 +174,7 @@ class SharedPrefsNotificationStore implements NotificationStore {
     String key,
     List<UnifiedNotificationEvent> events,
   ) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs();
     await prefs.setString(
       key,
       jsonEncode(events.map((item) => item.toJson()).toList()),
@@ -142,7 +182,7 @@ class SharedPrefsNotificationStore implements NotificationStore {
   }
 
   Future<Map<String, int>> _readRecent(String key) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs(reload: true);
     final raw = prefs.getString(key);
     if (raw == null || raw.isEmpty) return <String, int>{};
     try {
@@ -158,7 +198,7 @@ class SharedPrefsNotificationStore implements NotificationStore {
   }
 
   Future<void> _writeRecent(String key, String eventId) async {
-    final prefs = await SharedPreferences.getInstance();
+    final prefs = await _prefs();
     final map = await _readRecent(key);
     final now = DateTime.now();
     map.removeWhere(

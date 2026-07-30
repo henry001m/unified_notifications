@@ -5,4 +5,6 @@ abstract class NotificationRenderer {
   Future<void> show(UnifiedNotificationEvent event);
   Future<void> clearAll();
   Future<void> clearGroup(String groupKey);
+  Stream<UnifiedNotificationEvent> get onNotificationTap;
+  List<UnifiedNotificationEvent> takePendingOpened();
 }

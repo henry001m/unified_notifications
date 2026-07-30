@@ -22,10 +22,6 @@ class UnifiedNotificationConfig {
     this.mqttTopicResolver,
     this.router,
     this.deduplicationWindow = const Duration(minutes: 10),
-    this.foregroundServiceNotificationId = 48159,
-    this.foregroundServiceNotificationTitle = 'Sincronizacion en segundo plano',
-    this.foregroundServiceNotificationContent =
-        'Canal de notificaciones activo',
     this.onRawEvent,
   });
 
@@ -41,9 +37,6 @@ class UnifiedNotificationConfig {
   final TopicResolver? mqttTopicResolver;
   final NotificationRouter? router;
   final Duration deduplicationWindow;
-  final int foregroundServiceNotificationId;
-  final String foregroundServiceNotificationTitle;
-  final String foregroundServiceNotificationContent;
   final UnifiedNotificationCallback? onRawEvent;
 
   Map<String, dynamic> toJson() {

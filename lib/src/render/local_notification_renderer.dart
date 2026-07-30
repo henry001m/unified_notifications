@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,34 +12,21 @@ import '../models/unified_notification_event.dart';
 import '../storage/notification_store_keys.dart';
 import 'android_channel_manager.dart';
 
-const Set<String> _availableCustomSounds = {
-  'boecoin',
-  'boecoins',
-  'cupon',
-  'garantiaaceptada',
-  'garantiaaprobada',
-  'garantiafabrica',
-  'garantianormal',
-  'garantiarechazada',
-  'reclamo',
-  'wallet',
-  'walletdescuento',
-};
-
-const String _foregroundChannelId = 'unified_emqx_foreground_service';
-const String _foregroundChannelName = 'Notification Sync';
-const String _deliveryChannelId = 'unified_emqx_delivery';
-const String _deliveryChannelName = 'Notifications';
-
 class LocalNotificationRenderer implements NotificationRenderer {
   LocalNotificationRenderer({required this.config})
       : _channelManager = AndroidChannelManager(_plugin);
+
+  static const String _pendingOpenedEventsKey =
+      'unified_notifications_pending_opened_local_events';
 
   final UnifiedNotificationConfig config;
   static final FlutterLocalNotificationsPlugin _plugin =
       FlutterLocalNotificationsPlugin();
   final AndroidChannelManager _channelManager;
   static bool _initialized = false;
+  static final _openedController =
+      StreamController<UnifiedNotificationEvent>.broadcast();
+  static final List<UnifiedNotificationEvent> _pendingOpened = [];
 
   @override
   Future<void> initialize() async {
@@ -59,17 +47,29 @@ class LocalNotificationRenderer implements NotificationRenderer {
 
     await _plugin.initialize(
       InitializationSettings(android: androidSettings, iOS: iosSettings),
+      onDidReceiveNotificationResponse: _handleNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse:
+          _handleBackgroundNotificationResponse,
     );
+
+    final launchDetails = await _plugin.getNotificationAppLaunchDetails();
+    final launchResponse = launchDetails?.notificationResponse;
+    if (launchDetails?.didNotificationLaunchApp == true &&
+        launchResponse != null) {
+      _emitTapResponse(launchResponse, persistAsPending: true);
+    }
+
+    await _consumePendingOpenedFromStorage();
 
     final androidImplementation =
         _plugin.resolvePlatformSpecificImplementation<
             AndroidFlutterLocalNotificationsPlugin>();
 
     await androidImplementation?.createNotificationChannel(
-      const AndroidNotificationChannel(
-        _foregroundChannelId,
-        _foregroundChannelName,
-        description: 'Silent channel for background notification service',
+      AndroidNotificationChannel(
+        config.android.foregroundChannelId,
+        config.android.foregroundChannelName,
+        description: config.android.foregroundNotificationContent,
         importance: Importance.min,
         playSound: false,
         enableVibration: false,
@@ -78,10 +78,10 @@ class LocalNotificationRenderer implements NotificationRenderer {
     );
 
     await androidImplementation?.createNotificationChannel(
-      const AndroidNotificationChannel(
-        _deliveryChannelId,
-        _deliveryChannelName,
-        description: 'Notification delivery channel',
+      AndroidNotificationChannel(
+        config.android.defaultChannelId,
+        config.android.defaultChannelName,
+        description: config.android.defaultChannelDescription,
         importance: Importance.max,
         playSound: true,
         enableVibration: true,
@@ -89,25 +89,31 @@ class LocalNotificationRenderer implements NotificationRenderer {
       ),
     );
 
-    await androidImplementation?.requestNotificationsPermission();
-
-    final iosImplementation =
-        _plugin.resolvePlatformSpecificImplementation<
-            IOSFlutterLocalNotificationsPlugin>();
-    await iosImplementation?.requestPermissions(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // Los permisos deben solicitarse desde el flujo principal de la app
+    // mediante los bridges de FCM/APNs. Pedir permisos desde este renderer
+    // puede fallar en isolates de background (por ejemplo, en Android con
+    // firebaseMessagingBackgroundHandler) porque no siempre hay Activity
+    // disponible para plugins como flutter_local_notifications.
 
     _initialized = true;
   }
 
+  @override
+  Stream<UnifiedNotificationEvent> get onNotificationTap =>
+      _openedController.stream;
+
+  @override
+  List<UnifiedNotificationEvent> takePendingOpened() {
+    final items = List<UnifiedNotificationEvent>.from(_pendingOpened);
+    _pendingOpened.clear();
+    return items;
+  }
+
   Future<void> ensureForegroundChannel() async {
     await _channelManager.ensureChannel(
-      channelId: _foregroundChannelId,
-      channelName: _foregroundChannelName,
-      description: 'Silent channel for background service',
+      channelId: config.android.foregroundChannelId,
+      channelName: config.android.foregroundChannelName,
+      description: config.android.foregroundNotificationContent,
       importance: Importance.min,
     );
   }
@@ -157,7 +163,7 @@ class LocalNotificationRenderer implements NotificationRenderer {
           android: AndroidNotificationDetails(
             channelId,
             channelName,
-            channelDescription: 'Notification delivery channel',
+            channelDescription: config.android.defaultChannelDescription,
             importance: Importance.max,
             priority: Priority.max,
             playSound: true,
@@ -197,8 +203,8 @@ class LocalNotificationRenderer implements NotificationRenderer {
       debugPrint('[Notifications] Error con sonido personalizado, usando default: $e');
 
       await _ensureAndroidDeliveryChannel(
-        channelId: _deliveryChannelId,
-        channelName: _deliveryChannelName,
+        channelId: config.android.defaultChannelId,
+        channelName: config.android.defaultChannelName,
       );
 
       await _plugin.show(
@@ -207,9 +213,9 @@ class LocalNotificationRenderer implements NotificationRenderer {
         event.body,
         NotificationDetails(
           android: AndroidNotificationDetails(
-            _deliveryChannelId,
-            _deliveryChannelName,
-            channelDescription: 'Notification delivery channel',
+            config.android.defaultChannelId,
+            config.android.defaultChannelName,
+            channelDescription: config.android.defaultChannelDescription,
             importance: Importance.max,
             priority: Priority.max,
             playSound: true,
@@ -267,9 +273,9 @@ class LocalNotificationRenderer implements NotificationRenderer {
       summaryText,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          _deliveryChannelId,
-          _deliveryChannelName,
-          channelDescription: 'Notification delivery channel',
+          config.android.defaultChannelId,
+          config.android.defaultChannelName,
+          channelDescription: config.android.defaultChannelDescription,
           importance: Importance.low,
           priority: Priority.low,
           playSound: false,
@@ -301,7 +307,7 @@ class LocalNotificationRenderer implements NotificationRenderer {
       AndroidNotificationChannel(
         channelId,
         channelName,
-        description: 'Notification delivery channel',
+        description: config.android.defaultChannelDescription,
         importance: Importance.max,
         playSound: true,
         sound: androidSound != null
@@ -311,6 +317,113 @@ class LocalNotificationRenderer implements NotificationRenderer {
         showBadge: true,
       ),
     );
+  }
+
+  static void _handleNotificationResponse(NotificationResponse response) {
+    _emitTapResponse(response, persistAsPending: false);
+  }
+
+  @pragma('vm:entry-point')
+  static void _handleBackgroundNotificationResponse(
+    NotificationResponse response,
+  ) {
+    _emitTapResponse(response, persistAsPending: true);
+  }
+
+  static void _emitTapResponse(
+    NotificationResponse response, {
+    required bool persistAsPending,
+  }) {
+    final event = _decodeEventFromPayload(response.payload);
+    if (event == null) {
+      debugPrint(
+        '[Notifications] Tap de notificación local ignorado por payload vacío o inválido.',
+      );
+      return;
+    }
+
+    final normalized = event.copyWith(openedFromSystem: true);
+
+    _pendingOpened.removeWhere(
+      (existing) => existing.eventId == normalized.eventId,
+    );
+    _pendingOpened.add(normalized);
+    _openedController.add(normalized);
+
+    if (persistAsPending) {
+      _persistPendingOpenedEvent(normalized);
+    }
+  }
+
+  static UnifiedNotificationEvent? _decodeEventFromPayload(String? payload) {
+    final normalizedPayload = payload?.trim();
+    if (normalizedPayload == null || normalizedPayload.isEmpty) {
+      return null;
+    }
+
+    try {
+      final decoded = jsonDecode(normalizedPayload);
+      if (decoded is Map<String, dynamic>) {
+        return UnifiedNotificationEvent.fromJson(decoded);
+      }
+      if (decoded is Map) {
+        return UnifiedNotificationEvent.fromJson(
+          Map<String, dynamic>.from(decoded),
+        );
+      }
+    } catch (error) {
+      debugPrint(
+        '[Notifications] Error parseando payload de tap local: $error | payload=$payload',
+      );
+    }
+
+    return null;
+  }
+
+  static Future<void> _persistPendingOpenedEvent(
+    UnifiedNotificationEvent event,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final current = prefs.getStringList(_pendingOpenedEventsKey) ?? <String>[];
+      final encodedEvent = jsonEncode(event.toJson());
+      final next = current.where((item) {
+        final existing = _decodeEventFromPayload(item);
+        return existing?.eventId != event.eventId;
+      }).toList(growable: true)
+        ..add(encodedEvent);
+      await prefs.setStringList(_pendingOpenedEventsKey, next);
+    } catch (error) {
+      debugPrint(
+        '[Notifications] No se pudo persistir tap local pendiente: $error',
+      );
+    }
+  }
+
+  static Future<void> _consumePendingOpenedFromStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final stored = prefs.getStringList(_pendingOpenedEventsKey) ?? <String>[];
+      if (stored.isEmpty) {
+        return;
+      }
+
+      await prefs.remove(_pendingOpenedEventsKey);
+
+      for (final raw in stored) {
+        final event = _decodeEventFromPayload(raw);
+        if (event == null) continue;
+        final normalized = event.copyWith(openedFromSystem: true);
+        _pendingOpened.removeWhere(
+          (existing) => existing.eventId == normalized.eventId,
+        );
+        _pendingOpened.add(normalized);
+      }
+    } catch (error) {
+      debugPrint(
+        '[Notifications] No se pudieron consumir taps locales pendientes: $error',
+      );
+    }
   }
 
   Future<bool> _tryReserveEventId(String eventId) async {
@@ -416,8 +529,7 @@ class LocalNotificationRenderer implements NotificationRenderer {
     final normalized = sound
         .toLowerCase()
         .replaceAll(RegExp(r'\.(wav|mp3|ogg|caf|aiff)$'), '');
-    if (normalized.isEmpty) return null;
-    return _availableCustomSounds.contains(normalized) ? normalized : null;
+    return normalized.isEmpty ? null : normalized;
   }
 
   String? _resolveIosSoundName(String? rawSound) {
@@ -428,25 +540,22 @@ class LocalNotificationRenderer implements NotificationRenderer {
         lower.endsWith('.mp3') ||
         lower.endsWith('.caf') ||
         lower.endsWith('.aiff')) {
-      final baseName = lower
-          .replaceAll(RegExp(r'\.(wav|mp3|caf|aiff)$'), '')
-          .trim();
-      return _availableCustomSounds.contains(baseName) ? sound : null;
+      return sound;
     }
-    return _availableCustomSounds.contains(lower) ? '$sound.wav' : null;
+    return '$sound.wav';
   }
 
   String _resolveDeliveryChannelId(String? androidSound) {
     if (androidSound == null || androidSound.isEmpty) {
-      return _deliveryChannelId;
+      return config.android.defaultChannelId;
     }
-    return '${_deliveryChannelId}_$androidSound';
+    return '${config.android.defaultChannelId}_$androidSound';
   }
 
   String _resolveDeliveryChannelName(String? androidSound) {
     if (androidSound == null || androidSound.isEmpty) {
-      return _deliveryChannelName;
+      return config.android.defaultChannelName;
     }
-    return '$_deliveryChannelName $androidSound';
+    return '${config.android.defaultChannelName} $androidSound';
   }
 }

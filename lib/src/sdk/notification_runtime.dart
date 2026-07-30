@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter/foundation.dart';
 
 import '../bridges/apns/apns_bridge.dart';
 import '../bridges/fcm/fcm_bridge.dart';
@@ -12,11 +12,12 @@ import '../contracts/realtime_bridge.dart';
 import '../core/lifecycle_coordinator.dart';
 import '../core/notification_deduplicator.dart';
 import '../core/notification_grouper.dart';
+import '../core/notification_visibility.dart';
 import '../models/notification_group.dart';
+import '../models/notification_source.dart';
 import '../models/notification_token_bundle.dart';
 import '../models/unified_notification_event.dart';
 import 'background_bootstrap.dart';
-import 'background_notification_service.dart';
 
 class NotificationRuntime {
   NotificationRuntime({
@@ -47,12 +48,13 @@ class NotificationRuntime {
       StreamController<UnifiedNotificationEvent>.broadcast();
   final _tokenController =
       StreamController<NotificationTokenBundle>.broadcast();
+  final List<UnifiedNotificationEvent> _pendingReceivedForSubscribers = [];
+  final List<UnifiedNotificationEvent> _pendingOpenedForSubscribers = [];
 
   final Map<String, DateTime> _localReceivedCache = {};
   final Map<String, DateTime> _localOpenedCache = {};
 
   String? _currentUserId;
-  String? _currentTopicBase;
   bool _initialized = false;
   StreamSubscription<UnifiedNotificationEvent>? _fcmForegroundSub;
   StreamSubscription<UnifiedNotificationEvent>? _fcmOpenedSub;
@@ -63,8 +65,7 @@ class NotificationRuntime {
   StreamSubscription<void>? _mqttDisconnectedSub;
   StreamSubscription<NotificationTokenBundle>? _fcmTokenSub;
   StreamSubscription<NotificationTokenBundle>? _apnsTokenSub;
-  StreamSubscription<Map<String, dynamic>>? _bgReceivedSub;
-  StreamSubscription<Map<String, dynamic>>? _bgOpenedSub;
+  StreamSubscription<UnifiedNotificationEvent>? _rendererTapSub;
   LifecycleCoordinator? _lifecycle;
 
   Future<void> initialize() async {
@@ -73,6 +74,25 @@ class NotificationRuntime {
 
     await BackgroundBootstrap.saveConfig(config);
     await renderer.initialize();
+    _rendererTapSub?.cancel();
+    _rendererTapSub = renderer.onNotificationTap.listen((event) async {
+      await _onOpened(
+        event.copyWith(
+          source: NotificationSource.localTap,
+          openedFromSystem: true,
+        ),
+        'local_renderer',
+      );
+    });
+    for (final event in renderer.takePendingOpened()) {
+      await _onOpened(
+        event.copyWith(
+          source: NotificationSource.localTap,
+          openedFromSystem: true,
+        ),
+        'local_renderer_pending',
+      );
+    }
 
     if (config.enableFcm && fcmBridge != null) {
       await fcmBridge!.initialize();
@@ -114,35 +134,27 @@ class NotificationRuntime {
     _mqttConnectedSub = realtimeBridge.onConnected.listen((_) {});
     _mqttDisconnectedSub = realtimeBridge.onDisconnected.listen((_) {});
 
-    _bgReceivedSub =
-        BackgroundNotificationService.instance.onPendingEvent.listen(
-      (data) {
-        final event = UnifiedNotificationEvent.fromJson(data);
-        _onReceived(event, 'background_mqtt');
-      },
-    );
-
-    _bgOpenedSub =
-        BackgroundNotificationService.instance.onOpenedEvent.listen(
-      (data) {
-        final event = UnifiedNotificationEvent.fromJson(data);
-        _onOpened(event, 'background_mqtt');
-      },
-    );
-
     _lifecycle?.dispose();
     _lifecycle = LifecycleCoordinator(
       onResumed: () async {
-        await _drainPendingQueue();
+        await _synchronizePendingSources();
         await _ensureMqttConnected();
       },
       onBackgrounded: () async {
+        // En segundo plano no forzamos la desconexión de MQTT.
+        // Sin foreground service, el sistema terminará suspendiendo o cerrando
+        // el proceso cuando corresponda; mientras tanto, mantener el socket
+        // activo permite conservar el comportamiento de notificaciones en
+        // minimizado y deja FCM/APNs como respaldo cuando la app ya no pueda
+        // sostener la conexión.
+      },
+      onDetached: () async {
         await realtimeBridge.disconnect();
       },
     );
     _lifecycle!.register();
 
-    await _drainPendingQueue();
+    await _synchronizePendingSources();
     await _emitTokens();
   }
 
@@ -150,10 +162,9 @@ class NotificationRuntime {
     UnifiedNotificationEvent event,
     String provider,
   ) async {
-    if (!_deduplicator.shouldProcessReceivedSync(
-      event,
-      _localReceivedCache,
-    )) {
+    final hiddenOwn = isHiddenOwnNotificationEvent(event);
+
+    if (!_deduplicator.shouldProcessReceivedSync(event, _localReceivedCache)) {
       return;
     }
 
@@ -161,29 +172,58 @@ class NotificationRuntime {
       return;
     }
 
-    if (config.enableSystemNotifications &&
-        provider != 'background_mqtt') {
-      final alreadyDelivered =
-          await store.wasRecentlyDelivered(event.eventId);
-      if (!alreadyDelivered) {
-        await renderer.show(event);
-      }
+    if (!hiddenOwn &&
+        config.enableSystemNotifications &&
+        provider != 'background_mqtt' &&
+        _shouldRenderSystemNotification(event, provider)) {
+      await renderer.show(event);
     }
 
-    await store.saveInboxEvent(event);
+    if (!hiddenOwn) {
+      await store.saveInboxEvent(event);
+    }
+    _pendingReceivedForSubscribers.removeWhere(
+      (existing) => existing.eventId == event.eventId,
+    );
+    _pendingReceivedForSubscribers.add(event);
     _receivedController.add(event);
     _allEventsController.add(event);
     await config.onRawEvent?.call(event.toJson());
+  }
+
+  bool _shouldRenderSystemNotification(
+    UnifiedNotificationEvent event,
+    String provider,
+  ) {
+    if (provider == 'background_mqtt') {
+      return false;
+    }
+
+    if (kIsWeb || defaultTargetPlatform != TargetPlatform.iOS) {
+      return true;
+    }
+
+    switch (event.source) {
+      case NotificationSource.apnsForeground:
+      case NotificationSource.apnsOpened:
+      case NotificationSource.fcmForeground:
+      case NotificationSource.fcmBackground:
+      case NotificationSource.fcmOpened:
+        return false;
+      case NotificationSource.mqtt:
+        return !(config.enableApns || config.enableFcm);
+      default:
+        return true;
+    }
   }
 
   Future<void> _onOpened(
     UnifiedNotificationEvent event,
     String provider,
   ) async {
-    if (!_deduplicator.shouldProcessReceivedSync(
-      event,
-      _localOpenedCache,
-    )) {
+    final hiddenOwn = isHiddenOwnNotificationEvent(event);
+
+    if (!_deduplicator.shouldProcessReceivedSync(event, _localOpenedCache)) {
       return;
     }
 
@@ -191,12 +231,18 @@ class NotificationRuntime {
       return;
     }
 
-    await store.saveInboxEvent(event);
-    await store.markOpened(event.eventId);
+    if (!hiddenOwn) {
+      await store.saveInboxEvent(event);
+      await store.markOpened(event.eventId);
+    }
+    _pendingOpenedForSubscribers.removeWhere(
+      (existing) => existing.eventId == event.eventId,
+    );
+    _pendingOpenedForSubscribers.add(event);
     _openedController.add(event);
     _allEventsController.add(event);
 
-    if (router != null) {
+    if (!hiddenOwn && router != null) {
       await router!.handle(event);
     }
   }
@@ -208,14 +254,11 @@ class NotificationRuntime {
   Future<void> login(String userId) async {
     _currentUserId = userId.trim();
     await _ensureMqttConnected();
-    await _startBackgroundService();
     await _emitTokens();
   }
 
   Future<void> logout() async {
     _currentUserId = null;
-    _currentTopicBase = null;
-    await BackgroundNotificationService.instance.disconnectUser();
     await realtimeBridge.disconnect();
   }
 
@@ -226,7 +269,8 @@ class NotificationRuntime {
       return;
     }
 
-    final topic = config.mqttTopicResolver?.resolveTopic(
+    final topic =
+        config.mqttTopicResolver?.resolveTopic(
           userId: _currentUserId!,
           topicBase: config.mqtt.topicBase,
         ) ??
@@ -235,71 +279,32 @@ class NotificationRuntime {
     await realtimeBridge.connect(userId: _currentUserId!, topic: topic);
   }
 
-  Future<void> _startBackgroundService() async {
-    if (!config.enableMqtt || _currentUserId == null) return;
-
-    final service = FlutterBackgroundService();
-    final isRunning = await service.isRunning();
-    if (!isRunning) {
-      await service.configure(
-        androidConfiguration: AndroidConfiguration(
-          onStart: unifiedNotificationsBackgroundEntryPoint,
-          autoStart: true,
-          autoStartOnBoot: true,
-          isForegroundMode: false,
-          foregroundServiceNotificationId:
-              config.foregroundServiceNotificationId,
-          initialNotificationTitle:
-              config.foregroundServiceNotificationTitle,
-          initialNotificationContent:
-              config.foregroundServiceNotificationContent,
-        ),
-        iosConfiguration: IosConfiguration(
-          autoStart: true,
-          onForeground: unifiedNotificationsBackgroundEntryPoint,
-          onBackground: _iosBackgroundHandler,
-        ),
-      );
-      await service.startService();
-    }
-
-    await BackgroundNotificationService.instance.connectUser(
-      userId: _currentUserId!,
-      topicBase: _currentTopicBase ?? config.mqtt.topicBase,
-      showSystemNotifications: config.enableSystemNotifications,
-    );
-  }
-
-  Future<bool> _iosBackgroundHandler(ServiceInstance service) async {
-    return true;
-  }
-
   Future<void> _drainPendingQueue() async {
-    final pending = await BackgroundNotificationService.instance
-        .drainPending();
-    for (final data in pending) {
-      final event = UnifiedNotificationEvent.fromJson(data);
-      if (_deduplicator.shouldProcessReceivedSync(
-        event,
-        _localReceivedCache,
-      )) {
-        await store.saveInboxEvent(event);
-        _receivedController.add(event);
-        _allEventsController.add(event);
-      }
-    }
-
     final storePending = await store.drainPendingEvents();
     for (final event in storePending) {
-      if (_deduplicator.shouldProcessReceivedSync(
-        event,
-        _localReceivedCache,
-      )) {
-        await store.saveInboxEvent(event);
+      if (_deduplicator.shouldProcessReceivedSync(event, _localReceivedCache)) {
+        if (!isHiddenOwnNotificationEvent(event)) {
+          await store.saveInboxEvent(event);
+        }
         _receivedController.add(event);
         _allEventsController.add(event);
       }
     }
+  }
+
+  Future<void> _synchronizePendingSources() async {
+    if (apnsBridge != null) {
+      final apnsPending = await apnsBridge!
+          .consumePendingNativeEventsSynchronously();
+      for (final event in apnsPending.received) {
+        await _onReceived(event, 'apns_pending_sync');
+      }
+      for (final event in apnsPending.opened) {
+        await _onOpened(event, 'apns_pending_sync');
+      }
+    }
+
+    await _drainPendingQueue();
   }
 
   Future<void> _emitTokens() async {
@@ -323,22 +328,42 @@ class NotificationRuntime {
 
   String? get currentUserId => _currentUserId;
 
-  Stream<UnifiedNotificationEvent> get onReceived =>
-      _receivedController.stream;
-  Stream<UnifiedNotificationEvent> get onOpened =>
-      _openedController.stream;
+  Stream<UnifiedNotificationEvent> get onReceived => _receivedController.stream;
+  Stream<UnifiedNotificationEvent> get onOpened => _openedController.stream;
   Stream<UnifiedNotificationEvent> get onAllEvents =>
       _allEventsController.stream;
-  Stream<NotificationTokenBundle> get onTokenUpdated =>
-      _tokenController.stream;
+  Stream<NotificationTokenBundle> get onTokenUpdated => _tokenController.stream;
 
-  Future<List<UnifiedNotificationEvent>> getInbox() => store.getInbox();
+  List<UnifiedNotificationEvent> takePendingReceivedForSubscribers() {
+    final items = List<UnifiedNotificationEvent>.from(
+      _pendingReceivedForSubscribers,
+    );
+    _pendingReceivedForSubscribers.clear();
+    return items;
+  }
+
+  List<UnifiedNotificationEvent> takePendingOpenedForSubscribers() {
+    final items = List<UnifiedNotificationEvent>.from(
+      _pendingOpenedForSubscribers,
+    );
+    _pendingOpenedForSubscribers.clear();
+    return items;
+  }
+
+  Future<List<UnifiedNotificationEvent>> getInbox() async {
+    await _synchronizePendingSources();
+    return store.getInbox();
+  }
 
   Future<List<NotificationGroup>> getGroupedInbox() async {
+    await _synchronizePendingSources();
     return _grouper.group(await store.getInbox());
   }
 
-  Future<int> getUnreadCount() => store.getUnreadCount();
+  Future<int> getUnreadCount() async {
+    await _synchronizePendingSources();
+    return store.getUnreadCount();
+  }
 
   Future<void> markAllAsRead() => store.markAllRead();
 
@@ -375,8 +400,7 @@ class NotificationRuntime {
     await _mqttDisconnectedSub?.cancel();
     await _fcmTokenSub?.cancel();
     await _apnsTokenSub?.cancel();
-    await _bgReceivedSub?.cancel();
-    await _bgOpenedSub?.cancel();
+    await _rendererTapSub?.cancel();
     await realtimeBridge.disconnect();
   }
 }

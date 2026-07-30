@@ -7,11 +7,6 @@ class NotificationStoreKeys {
   static const String bootstrapConfig = 'unified_notifications_bootstrap';
   static const String fcmToken = 'fcm_device_token';
   static const String apnsToken = 'apns_device_token';
-
-  static const String notificationUserId = 'boe_emqx_notification_user_id';
-  static const String notificationTopicBase = 'boe_emqx_topic_base';
-  static const String showSystemNotificationsKey =
-      'boe_emqx_show_system_notifications';
   static const String pendingQueue = 'boe_emqx_notification_pending_queue';
   static const String displayedIdsByGroup =
       'boe_emqx_displayed_ids_by_group';

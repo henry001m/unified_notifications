@@ -16,6 +16,8 @@ const Set<String> _reservedPayloadKeys = {
   'grp',
   'group_key',
   'group_id',
+  'thread_id',
+  'collapse_id',
   'id',
   'cabecera_mensaje',
   'contenido_mensaje',
@@ -27,6 +29,9 @@ const Set<String> _reservedPayloadKeys = {
   'route',
   'ruta',
   'data',
+  'custom',
+  'additionalData',
+  'a',
   'aps',
 };
 
@@ -59,20 +64,31 @@ class NotificationNormalizer {
   }) {
     final nestedData = decodeNestedData(payload);
     final merged = <String, dynamic>{...nestedData, ...payload};
-
-    final title = firstNonEmptyString([
+    final aps = merged['aps'];
+    final apsMap = aps is Map
+        ? Map<String, dynamic>.from(aps)
+        : <String, dynamic>{};
+    final alert = apsMap['alert'];
+    final alertMap = alert is Map
+        ? Map<String, dynamic>.from(alert)
+        : <String, dynamic>{};
+    final title =
+        firstNonEmptyString([
           merged['cabecera_mensaje'],
           merged['titulo'],
           merged['title'],
           merged['heading'],
+          alertMap['title'],
         ]) ??
         'Sin titulo';
-    final body = firstNonEmptyString([
+    final body =
+        firstNonEmptyString([
           merged['contenido_mensaje'],
           merged['cuerpo'],
           merged['body'],
           merged['message'],
           merged['content'],
+          alertMap['body'],
         ]) ??
         '';
     final route = firstNonEmptyString([
@@ -83,7 +99,13 @@ class NotificationNormalizer {
 
     final additionalData = _extractAdditionalData(merged, route);
 
-    final eventId = _resolveEventId(merged, title: title, body: body, route: route, additionalData: additionalData);
+    final eventId = _resolveEventId(
+      merged,
+      title: title,
+      body: body,
+      route: route,
+      additionalData: additionalData,
+    );
     final groupKey = _resolveGroupKey(merged, additionalData, title: title);
     final sound = _extractSound(merged);
     final entityIds = _extractEntityIds(merged);
@@ -95,7 +117,7 @@ class NotificationNormalizer {
       body: body,
       route: route,
       source: source,
-      receivedAt: DateTime.now(),
+      receivedAt: _resolveReceivedAt(merged),
       sound: sound,
       channelId: firstNonEmptyString([
         merged['channel'],
@@ -130,6 +152,46 @@ class NotificationNormalizer {
     );
   }
 
+  DateTime _resolveReceivedAt(Map<String, dynamic> merged) {
+    final rawCandidates = <dynamic>[
+      merged['received_at_ms'],
+      merged['receivedAtMs'],
+      merged['timestamp_ms'],
+      merged['timestamp'],
+    ];
+
+    for (final candidate in rawCandidates) {
+      final parsed = _parseMilliseconds(candidate);
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+
+    return DateTime.now();
+  }
+
+  DateTime? _parseMilliseconds(dynamic raw) {
+    if (raw == null) {
+      return null;
+    }
+
+    if (raw is num) {
+      return DateTime.fromMillisecondsSinceEpoch(raw.toInt());
+    }
+
+    final normalized = raw.toString().trim();
+    if (normalized.isEmpty) {
+      return null;
+    }
+
+    final milliseconds = int.tryParse(normalized);
+    if (milliseconds != null) {
+      return DateTime.fromMillisecondsSinceEpoch(milliseconds);
+    }
+
+    return DateTime.tryParse(normalized);
+  }
+
   String _resolveEventId(
     Map<String, dynamic> merged, {
     required String title,
@@ -151,12 +213,20 @@ class NotificationNormalizer {
     return 'evt_${deriveStableHash(canonical)}';
   }
 
-  String? _extractEventKey(Map<String, dynamic> additionalData, Map<String, dynamic> merged) {
+  String? _extractEventKey(
+    Map<String, dynamic> additionalData,
+    Map<String, dynamic> merged,
+  ) {
+    final custom = merged['custom'];
+    final customMap = custom is Map
+        ? Map<String, dynamic>.from(custom)
+        : <String, dynamic>{};
     final candidates = <dynamic>[
       additionalData['notf_id'],
       additionalData['event_id'],
       additionalData['id_notificacion'],
       additionalData['notification_id'],
+      customMap['i'],
       merged['notf_id'],
       merged['event_id'],
       merged['notification_id'],
@@ -179,6 +249,14 @@ class NotificationNormalizer {
     Map<String, dynamic> additionalData, {
     required String title,
   }) {
+    final aps = merged['aps'];
+    final apsMap = aps is Map
+        ? Map<String, dynamic>.from(aps)
+        : <String, dynamic>{};
+    final custom = merged['custom'];
+    final customMap = custom is Map
+        ? Map<String, dynamic>.from(custom)
+        : <String, dynamic>{};
     final candidates = <dynamic>[
       merged['grp'],
       additionalData['grp'],
@@ -187,6 +265,8 @@ class NotificationNormalizer {
       merged['group_key'],
       merged['group_id'],
       merged['thread_id'],
+      apsMap['thread-id'],
+      customMap['collapse_id'],
     ];
 
     for (final candidate in candidates) {
@@ -256,8 +336,10 @@ class NotificationNormalizer {
   dynamic _jsonSafeValue(dynamic value) {
     if (value is Map) {
       return Map<String, dynamic>.from(
-        value.map((key, nestedValue) =>
-            MapEntry(key.toString(), _jsonSafeValue(nestedValue))),
+        value.map(
+          (key, nestedValue) =>
+              MapEntry(key.toString(), _jsonSafeValue(nestedValue)),
+        ),
       );
     }
     if (value is List) {

@@ -11,8 +11,6 @@ abstract class UnifiedNotificationSdk {
   Future<void> disableNotifications();
   Future<String?> getFcmToken();
   Future<String?> getApnsToken();
-  Future<String?> getOneSignalId();
-  Future<String?> getOneSignalSubscripcionId();
   Future<NotificationTokenBundle> getTokenBundle();
   Future<String?> getCurrentUserId();
   Future<void> subscribeToTopic(String topic);

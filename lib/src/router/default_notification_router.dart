@@ -77,13 +77,13 @@ class DefaultNotificationRouter implements NotificationRouter {
   Future<void> handle(UnifiedNotificationEvent event) async {
     if (event.route == null || event.route!.isEmpty) return;
 
-    final screen = _defaultRouteMap[event.route!.toLowerCase()];
+    final screen = _defaultRouteMap[event.route!];
     if (screen != null) {
       // Override in subclasses to handle actual navigation
     }
   }
 
   String? resolveScreen(String route) {
-    return _defaultRouteMap[route.toLowerCase()];
+    return _defaultRouteMap[route];
   }
 }
