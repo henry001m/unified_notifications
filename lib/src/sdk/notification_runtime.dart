@@ -141,12 +141,10 @@ class NotificationRuntime {
         await _ensureMqttConnected();
       },
       onBackgrounded: () async {
-        // En segundo plano no forzamos la desconexión de MQTT.
-        // Sin foreground service, el sistema terminará suspendiendo o cerrando
-        // el proceso cuando corresponda; mientras tanto, mantener el socket
-        // activo permite conservar el comportamiento de notificaciones en
-        // minimizado y deja FCM/APNs como respaldo cuando la app ya no pueda
-        // sostener la conexión.
+        // MQTT solo debe vivir en foreground. En iOS el socket puede quedar
+        // abierto mientras el sistema suspende la app y el keepalive termina
+        // escribiendo sobre una conexión rota.
+        await realtimeBridge.disconnect();
       },
       onDetached: () async {
         await realtimeBridge.disconnect();

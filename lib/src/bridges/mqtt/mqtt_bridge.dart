@@ -73,6 +73,11 @@ class MqttBridge implements RealtimeBridge {
     };
     client.onDisconnected = () {
       debugPrint('[MQTT] Desconectado | usr_id=$userId');
+      _updatesSub?.cancel();
+      _updatesSub = null;
+      if (identical(_client, client)) {
+        _client = null;
+      }
       _disconnectedController.add(null);
       if (!_intentionalDisconnect) {
         _scheduleReconnect();
@@ -99,7 +104,12 @@ class MqttBridge implements RealtimeBridge {
       await client.connect();
     } catch (e) {
       debugPrint('[MQTT] Error de conexión: $e | usr_id=$userId');
-      client.disconnect();
+      try {
+        client.disconnect();
+      } catch (_) {}
+      if (identical(_client, client)) {
+        _client = null;
+      }
       _scheduleReconnect();
       return;
     }
@@ -108,7 +118,12 @@ class MqttBridge implements RealtimeBridge {
       debugPrint(
         '[MQTT] Conexión fallida | estado=${client.connectionStatus?.state} | usr_id=$userId',
       );
-      client.disconnect();
+      try {
+        client.disconnect();
+      } catch (_) {}
+      if (identical(_client, client)) {
+        _client = null;
+      }
       _scheduleReconnect();
       return;
     }
@@ -145,9 +160,11 @@ class MqttBridge implements RealtimeBridge {
     _intentionalDisconnect = true;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
-    _updatesSub?.cancel();
+    await _updatesSub?.cancel();
     _updatesSub = null;
-    _client?.disconnect();
+    try {
+      _client?.disconnect();
+    } catch (_) {}
     _client = null;
   }
 
