@@ -8,6 +8,7 @@ abstract class NotificationStore {
   Future<void> markAllRead();
   Future<void> updateItem(UnifiedNotificationEvent event);
   Future<void> clearAll();
+  Future<void> clearEvent(String eventId);
   Future<void> clearGroup(String groupKey);
   Future<void> enqueuePendingEvent(UnifiedNotificationEvent event);
   Future<List<UnifiedNotificationEvent>> drainPendingEvents();

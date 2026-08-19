@@ -26,6 +26,17 @@ class HiveNotificationStore implements NotificationStore {
   }
 
   @override
+  Future<void> clearEvent(String eventId) async {
+    final inbox = await getInbox();
+    inbox.removeWhere((item) => item.eventId == eventId);
+    await _writeInbox(inbox);
+
+    final pending = await _readEventList(_pendingKey);
+    pending.removeWhere((item) => item.eventId == eventId);
+    await _writeEventList(_pendingKey, pending);
+  }
+
+  @override
   Future<void> clearGroup(String groupKey) async {
     final inbox = await getInbox();
     final filtered = inbox.where((item) => item.groupKey != groupKey).toList();

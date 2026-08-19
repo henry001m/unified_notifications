@@ -16,6 +16,7 @@ abstract class UnifiedNotificationSdk {
   Future<void> subscribeToTopic(String topic);
   Future<void> unsubscribeFromTopic(String topic);
   Future<void> clearNotifications();
+  Future<void> clearNotification(String eventId);
   Future<void> clearNotificationGroup(String groupKey);
   Future<void> markNotificationAsOpened(String eventId);
   Future<void> markAllAsRead();

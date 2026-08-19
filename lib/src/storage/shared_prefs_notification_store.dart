@@ -31,6 +31,17 @@ class SharedPrefsNotificationStore implements NotificationStore {
   }
 
   @override
+  Future<void> clearEvent(String eventId) async {
+    final inbox = await getInbox();
+    inbox.removeWhere((item) => item.eventId == eventId);
+    await _writeEventList(NotificationStoreKeys.inbox, inbox);
+
+    final pending = await _readEventList(NotificationStoreKeys.pending);
+    pending.removeWhere((item) => item.eventId == eventId);
+    await _writeEventList(NotificationStoreKeys.pending, pending);
+  }
+
+  @override
   Future<void> clearGroup(String groupKey) async {
     final inbox = await getInbox();
     final filtered = inbox.where((item) => item.groupKey != groupKey).toList();

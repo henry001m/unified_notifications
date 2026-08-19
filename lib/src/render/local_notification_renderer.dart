@@ -122,6 +122,13 @@ class LocalNotificationRenderer implements NotificationRenderer {
   Future<void> clearAll() => _plugin.cancelAll();
 
   @override
+  Future<void> clearEvent(String eventId) async {
+    final notificationId = eventId.hashCode & 0x7fffffff;
+    await _plugin.cancel(notificationId);
+    await _removeDisplayedNotificationId(notificationId);
+  }
+
+  @override
   Future<void> clearGroup(String groupKey) async {
     final removedIds = await _removeDisplayedNotificationIds(groupKey);
     for (final id in removedIds) {
@@ -518,6 +525,39 @@ class LocalNotificationRenderer implements NotificationRenderer {
       );
     }
     return removed;
+  }
+
+  Future<void> _removeDisplayedNotificationId(int notificationId) async {
+    final registry = await _readDisplayedNotificationRegistry();
+    String? affectedGroup;
+    for (final entry in registry.entries) {
+      if (entry.value.remove(notificationId)) {
+        affectedGroup = entry.key;
+        if (entry.value.isEmpty) {
+          registry.remove(entry.key);
+        } else {
+          registry[entry.key] = entry.value;
+        }
+        break;
+      }
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    if (registry.isEmpty) {
+      await prefs.remove(NotificationStoreKeys.displayedIdsByGroup);
+    } else {
+      await prefs.setString(
+        NotificationStoreKeys.displayedIdsByGroup,
+        jsonEncode(registry),
+      );
+    }
+
+    if (affectedGroup != null) {
+      final remaining = registry[affectedGroup]?.length ?? 0;
+      if (remaining == 0) {
+        await _plugin.cancel(_summaryId(affectedGroup));
+      }
+    }
   }
 
   int _summaryId(String groupKey) =>

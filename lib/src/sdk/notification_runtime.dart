@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
@@ -161,23 +162,50 @@ class NotificationRuntime {
     String provider,
   ) async {
     final hiddenOwn = isHiddenOwnNotificationEvent(event);
+    final renderSystem = !hiddenOwn &&
+        config.enableSystemNotifications &&
+        provider != 'background_mqtt' &&
+        _shouldRenderSystemNotification(event, provider);
+    final saveInbox = !hiddenOwn;
+
+    _logNotificationEvent(
+      stage: 'received_incoming',
+      provider: provider,
+      event: event,
+      hidden: hiddenOwn,
+      renderSystem: renderSystem,
+      saveInbox: saveInbox,
+    );
 
     if (!_deduplicator.shouldProcessReceivedSync(event, _localReceivedCache)) {
+      _logNotificationEvent(
+        stage: 'received_skipped_local_dedup',
+        provider: provider,
+        event: event,
+        hidden: hiddenOwn,
+        renderSystem: renderSystem,
+        saveInbox: saveInbox,
+      );
       return;
     }
 
     if (!await _deduplicator.shouldProcessReceived(event)) {
+      _logNotificationEvent(
+        stage: 'received_skipped_store_dedup',
+        provider: provider,
+        event: event,
+        hidden: hiddenOwn,
+        renderSystem: renderSystem,
+        saveInbox: saveInbox,
+      );
       return;
     }
 
-    if (!hiddenOwn &&
-        config.enableSystemNotifications &&
-        provider != 'background_mqtt' &&
-        _shouldRenderSystemNotification(event, provider)) {
+    if (renderSystem) {
       await renderer.show(event);
     }
 
-    if (!hiddenOwn) {
+    if (saveInbox) {
       await store.saveInboxEvent(event);
     }
     _pendingReceivedForSubscribers.removeWhere(
@@ -187,6 +215,15 @@ class NotificationRuntime {
     _receivedController.add(event);
     _allEventsController.add(event);
     await config.onRawEvent?.call(event.toJson());
+
+    _logNotificationEvent(
+      stage: 'received_processed',
+      provider: provider,
+      event: event,
+      hidden: hiddenOwn,
+      renderSystem: renderSystem,
+      saveInbox: saveInbox,
+    );
   }
 
   bool _shouldRenderSystemNotification(
@@ -220,16 +257,43 @@ class NotificationRuntime {
     String provider,
   ) async {
     final hiddenOwn = isHiddenOwnNotificationEvent(event);
+    final saveInbox = !hiddenOwn;
+    final routeHandled = !hiddenOwn && router != null;
+
+    _logNotificationEvent(
+      stage: 'opened_incoming',
+      provider: provider,
+      event: event,
+      hidden: hiddenOwn,
+      saveInbox: saveInbox,
+      routeHandled: routeHandled,
+    );
 
     if (!_deduplicator.shouldProcessReceivedSync(event, _localOpenedCache)) {
+      _logNotificationEvent(
+        stage: 'opened_skipped_local_dedup',
+        provider: provider,
+        event: event,
+        hidden: hiddenOwn,
+        saveInbox: saveInbox,
+        routeHandled: routeHandled,
+      );
       return;
     }
 
     if (!await _deduplicator.shouldProcessOpened(event)) {
+      _logNotificationEvent(
+        stage: 'opened_skipped_store_dedup',
+        provider: provider,
+        event: event,
+        hidden: hiddenOwn,
+        saveInbox: saveInbox,
+        routeHandled: routeHandled,
+      );
       return;
     }
 
-    if (!hiddenOwn) {
+    if (saveInbox) {
       await store.saveInboxEvent(event);
       await store.markOpened(event.eventId);
     }
@@ -240,9 +304,18 @@ class NotificationRuntime {
     _openedController.add(event);
     _allEventsController.add(event);
 
-    if (!hiddenOwn && router != null) {
+    if (routeHandled) {
       await router!.handle(event);
     }
+
+    _logNotificationEvent(
+      stage: 'opened_processed',
+      provider: provider,
+      event: event,
+      hidden: hiddenOwn,
+      saveInbox: saveInbox,
+      routeHandled: routeHandled,
+    );
   }
 
   void _onTokensRefreshed(NotificationTokenBundle bundle) {
@@ -280,14 +353,69 @@ class NotificationRuntime {
   Future<void> _drainPendingQueue() async {
     final storePending = await store.drainPendingEvents();
     for (final event in storePending) {
+      final hidden = isHiddenOwnNotificationEvent(event);
+      _logNotificationEvent(
+        stage: 'pending_queue_drain',
+        provider: 'store_pending',
+        event: event,
+        hidden: hidden,
+        saveInbox: !hidden,
+      );
       if (_deduplicator.shouldProcessReceivedSync(event, _localReceivedCache)) {
-        if (!isHiddenOwnNotificationEvent(event)) {
+        if (!hidden) {
           await store.saveInboxEvent(event);
         }
         _receivedController.add(event);
         _allEventsController.add(event);
+        _logNotificationEvent(
+          stage: 'pending_queue_processed',
+          provider: 'store_pending',
+          event: event,
+          hidden: hidden,
+          saveInbox: !hidden,
+        );
+      } else {
+        _logNotificationEvent(
+          stage: 'pending_queue_skipped_local_dedup',
+          provider: 'store_pending',
+          event: event,
+          hidden: hidden,
+          saveInbox: !hidden,
+        );
       }
     }
+  }
+
+  void _logNotificationEvent({
+    required String stage,
+    required String provider,
+    required UnifiedNotificationEvent event,
+    required bool hidden,
+    bool? renderSystem,
+    bool? saveInbox,
+    bool? routeHandled,
+  }) {
+    final payload = <String, dynamic>{
+      'stage': stage,
+      'provider': provider,
+      'event_id': event.eventId,
+      'group_key': event.groupKey,
+      'source': event.source.name,
+      'title': event.effectiveTitle,
+      'body': event.body,
+      'tipo': extractNotificationType(event.data),
+      'evento': event.data['evento']?.toString(),
+      'hidden': hidden,
+      'render_system': renderSystem,
+      'save_inbox': saveInbox,
+      'route_handled': routeHandled,
+      'opened_from_system': event.openedFromSystem,
+      'is_read': event.isRead,
+      'received_at': event.receivedAt.toIso8601String(),
+      'data': event.data,
+    };
+
+    debugPrint('[Unified Notifications] ${jsonEncode(payload)}');
   }
 
   Future<void> _synchronizePendingSources() async {
@@ -368,6 +496,11 @@ class NotificationRuntime {
   Future<void> clearNotifications() async {
     await store.clearAll();
     await renderer.clearAll();
+  }
+
+  Future<void> clearNotification(String eventId) async {
+    await store.clearEvent(eventId);
+    await renderer.clearEvent(eventId);
   }
 
   Future<void> clearNotificationGroup(String groupKey) async {

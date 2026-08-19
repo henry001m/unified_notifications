@@ -91,6 +91,11 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
   }
 
   @override
+  Future<void> clearNotification(String eventId) {
+    return _safeRuntime.clearNotification(eventId);
+  }
+
+  @override
   Future<void> disableNotifications() async {}
 
   @override
