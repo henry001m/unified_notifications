@@ -8,8 +8,9 @@ class NotificationStoreKeys {
   static const String fcmToken = 'fcm_device_token';
   static const String apnsToken = 'apns_device_token';
   static const String pendingQueue = 'boe_emqx_notification_pending_queue';
-  static const String displayedIdsByGroup =
-      'boe_emqx_displayed_ids_by_group';
+  static const String displayedIdsByGroup = 'boe_emqx_displayed_ids_by_group';
   static const String recentlyDeliveredEventIds =
       'boe_emqx_recently_delivered_event_ids';
+  static const String pendingOpenedLocalEvents =
+      'unified_notifications_pending_opened_local_events';
 }

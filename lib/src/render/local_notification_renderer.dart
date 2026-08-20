@@ -14,10 +14,7 @@ import 'android_channel_manager.dart';
 
 class LocalNotificationRenderer implements NotificationRenderer {
   LocalNotificationRenderer({required this.config})
-      : _channelManager = AndroidChannelManager(_plugin);
-
-  static const String _pendingOpenedEventsKey =
-      'unified_notifications_pending_opened_local_events';
+    : _channelManager = AndroidChannelManager(_plugin);
 
   final UnifiedNotificationConfig config;
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -32,8 +29,9 @@ class LocalNotificationRenderer implements NotificationRenderer {
   Future<void> initialize() async {
     if (_initialized) return;
 
-    final androidSettings =
-        AndroidInitializationSettings(config.android.iconResource);
+    final androidSettings = AndroidInitializationSettings(
+      config.android.iconResource,
+    );
     final iosSettings = DarwinInitializationSettings(
       requestAlertPermission: false,
       requestBadgePermission: false,
@@ -61,9 +59,10 @@ class LocalNotificationRenderer implements NotificationRenderer {
 
     await _consumePendingOpenedFromStorage();
 
-    final androidImplementation =
-        _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final androidImplementation = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
 
     await androidImplementation?.createNotificationChannel(
       AndroidNotificationChannel(
@@ -207,7 +206,9 @@ class LocalNotificationRenderer implements NotificationRenderer {
         summaryTitle: event.effectiveTitle,
       );
     } on Exception catch (e) {
-      debugPrint('[Notifications] Error con sonido personalizado, usando default: $e');
+      debugPrint(
+        '[Notifications] Error con sonido personalizado, usando default: $e',
+      );
 
       await _ensureAndroidDeliveryChannel(
         channelId: config.android.defaultChannelId,
@@ -306,9 +307,10 @@ class LocalNotificationRenderer implements NotificationRenderer {
     required String channelName,
     String? androidSound,
   }) async {
-    final androidImplementation =
-        _plugin.resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final androidImplementation = _plugin
+        .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin
+        >();
 
     await androidImplementation?.createNotificationChannel(
       AndroidNotificationChannel(
@@ -392,14 +394,22 @@ class LocalNotificationRenderer implements NotificationRenderer {
   ) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final current = prefs.getStringList(_pendingOpenedEventsKey) ?? <String>[];
+      final current =
+          prefs.getStringList(NotificationStoreKeys.pendingOpenedLocalEvents) ??
+          <String>[];
       final encodedEvent = jsonEncode(event.toJson());
-      final next = current.where((item) {
-        final existing = _decodeEventFromPayload(item);
-        return existing?.eventId != event.eventId;
-      }).toList(growable: true)
-        ..add(encodedEvent);
-      await prefs.setStringList(_pendingOpenedEventsKey, next);
+      final next =
+          current
+              .where((item) {
+                final existing = _decodeEventFromPayload(item);
+                return existing?.eventId != event.eventId;
+              })
+              .toList(growable: true)
+            ..add(encodedEvent);
+      await prefs.setStringList(
+        NotificationStoreKeys.pendingOpenedLocalEvents,
+        next,
+      );
     } catch (error) {
       debugPrint(
         '[Notifications] No se pudo persistir tap local pendiente: $error',
@@ -410,12 +420,14 @@ class LocalNotificationRenderer implements NotificationRenderer {
   static Future<void> _consumePendingOpenedFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final stored = prefs.getStringList(_pendingOpenedEventsKey) ?? <String>[];
+      final stored =
+          prefs.getStringList(NotificationStoreKeys.pendingOpenedLocalEvents) ??
+          <String>[];
       if (stored.isEmpty) {
         return;
       }
 
-      await prefs.remove(_pendingOpenedEventsKey);
+      await prefs.remove(NotificationStoreKeys.pendingOpenedLocalEvents);
 
       for (final raw in stored) {
         final event = _decodeEventFromPayload(raw);
@@ -566,9 +578,10 @@ class LocalNotificationRenderer implements NotificationRenderer {
   String? _resolveAndroidSoundName(String? rawSound) {
     final sound = rawSound?.trim();
     if (sound == null || sound.isEmpty) return null;
-    final normalized = sound
-        .toLowerCase()
-        .replaceAll(RegExp(r'\.(wav|mp3|ogg|caf|aiff)$'), '');
+    final normalized = sound.toLowerCase().replaceAll(
+      RegExp(r'\.(wav|mp3|ogg|caf|aiff)$'),
+      '',
+    );
     return normalized.isEmpty ? null : normalized;
   }
 

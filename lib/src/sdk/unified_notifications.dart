@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../bridges/apns/apns_bridge.dart';
 import '../bridges/fcm/fcm_bridge.dart';
 import '../bridges/mqtt/mqtt_bridge.dart';
@@ -10,6 +12,7 @@ import '../models/notification_token_bundle.dart';
 import '../models/unified_notification_event.dart';
 import '../render/local_notification_renderer.dart';
 import '../storage/hive_notification_store.dart';
+import '../storage/notification_store_keys.dart';
 import '../storage/shared_prefs_notification_store.dart';
 import 'notification_runtime.dart';
 import 'unified_notification_sdk.dart';
@@ -18,6 +21,45 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
   UnifiedNotifications._();
 
   static final UnifiedNotifications instance = UnifiedNotifications._();
+
+  static Future<void> resetPersistedState({
+    bool clearBootstrapConfig = false,
+    bool clearDeviceTokens = false,
+    bool preserveInbox = false,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = <String>{
+      NotificationStoreKeys.delivered,
+      NotificationStoreKeys.opened,
+      NotificationStoreKeys.currentUserId,
+      NotificationStoreKeys.pendingQueue,
+      NotificationStoreKeys.displayedIdsByGroup,
+      NotificationStoreKeys.recentlyDeliveredEventIds,
+      NotificationStoreKeys.pendingOpenedLocalEvents,
+    };
+
+    if (!preserveInbox) {
+      keys
+        ..add(NotificationStoreKeys.inbox)
+        ..add(NotificationStoreKeys.pending);
+    } else {
+      keys.add(NotificationStoreKeys.pending);
+    }
+
+    if (clearBootstrapConfig) {
+      keys.add(NotificationStoreKeys.bootstrapConfig);
+    }
+
+    if (clearDeviceTokens) {
+      keys
+        ..add(NotificationStoreKeys.fcmToken)
+        ..add(NotificationStoreKeys.apnsToken);
+    }
+
+    for (final key in keys) {
+      await prefs.remove(key);
+    }
+  }
 
   NotificationRuntime? _runtime;
   late final StreamController<void> _mqttConnectedController =

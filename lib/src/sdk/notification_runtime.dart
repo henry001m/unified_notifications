@@ -162,7 +162,8 @@ class NotificationRuntime {
     String provider,
   ) async {
     final hiddenOwn = isHiddenOwnNotificationEvent(event);
-    final renderSystem = !hiddenOwn &&
+    final renderSystem =
+        !hiddenOwn &&
         config.enableSystemNotifications &&
         provider != 'background_mqtt' &&
         _shouldRenderSystemNotification(event, provider);
@@ -246,7 +247,7 @@ class NotificationRuntime {
       case NotificationSource.fcmOpened:
         return false;
       case NotificationSource.mqtt:
-        return !(config.enableApns || config.enableFcm);
+        return true;
       default:
         return true;
     }
