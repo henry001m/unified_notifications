@@ -43,10 +43,11 @@ Future<void> unifiedNotificationsFirebaseBackgroundHandler(
     payload,
     source: NotificationSource.fcmBackground,
   );
-  final hiddenOwn = isHiddenOwnNotificationEvent(event);
+  final hiddenOwn = isHiddenOwnNotificationEvent(event, config: config);
 
-  final NotificationStore store =
-      SharedPrefsNotificationStore(window: config.deduplicationWindow);
+  final NotificationStore store = SharedPrefsNotificationStore(
+    window: config.deduplicationWindow,
+  );
 
   try {
     await store.enqueuePendingEvent(event);

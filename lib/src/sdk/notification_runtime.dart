@@ -161,7 +161,7 @@ class NotificationRuntime {
     UnifiedNotificationEvent event,
     String provider,
   ) async {
-    final hiddenOwn = isHiddenOwnNotificationEvent(event);
+    final hiddenOwn = isHiddenOwnNotificationEvent(event, config: config);
     final renderSystem =
         !hiddenOwn &&
         config.enableSystemNotifications &&
@@ -257,7 +257,7 @@ class NotificationRuntime {
     UnifiedNotificationEvent event,
     String provider,
   ) async {
-    final hiddenOwn = isHiddenOwnNotificationEvent(event);
+    final hiddenOwn = isHiddenOwnNotificationEvent(event, config: config);
     final saveInbox = !hiddenOwn;
     final routeHandled = !hiddenOwn && router != null;
 
@@ -354,7 +354,7 @@ class NotificationRuntime {
   Future<void> _drainPendingQueue() async {
     final storePending = await store.drainPendingEvents();
     for (final event in storePending) {
-      final hidden = isHiddenOwnNotificationEvent(event);
+      final hidden = isHiddenOwnNotificationEvent(event, config: config);
       _logNotificationEvent(
         stage: 'pending_queue_drain',
         provider: 'store_pending',
