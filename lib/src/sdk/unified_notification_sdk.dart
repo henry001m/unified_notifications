@@ -25,6 +25,7 @@ abstract class UnifiedNotificationSdk {
   Future<List<NotificationGroup>> getGroupedInbox();
   Stream<UnifiedNotificationEvent> get onNotificationReceived;
   Stream<UnifiedNotificationEvent> get onNotificationOpened;
+  void requeuePendingOpenedForSubscribers(UnifiedNotificationEvent event);
   Stream<NotificationTokenBundle> get onTokenUpdated;
   Stream<void> get onMqttConnected;
   Stream<void> get onMqttDisconnected;

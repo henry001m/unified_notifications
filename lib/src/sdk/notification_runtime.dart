@@ -477,6 +477,13 @@ class NotificationRuntime {
     return items;
   }
 
+  void requeuePendingOpenedForSubscribers(UnifiedNotificationEvent event) {
+    _pendingOpenedForSubscribers.removeWhere(
+      (existing) => existing.eventId == event.eventId,
+    );
+    _pendingOpenedForSubscribers.add(event);
+  }
+
   Future<List<UnifiedNotificationEvent>> getInbox() async {
     await _synchronizePendingSources();
     return store.getInbox();

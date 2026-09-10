@@ -232,6 +232,11 @@ class UnifiedNotifications implements UnifiedNotificationSdk {
   }
 
   @override
+  void requeuePendingOpenedForSubscribers(UnifiedNotificationEvent event) {
+    _safeRuntime.requeuePendingOpenedForSubscribers(event);
+  }
+
+  @override
   Future<void> subscribeToTopic(String topic) {
     return _safeRuntime.subscribeToTopic(topic);
   }
