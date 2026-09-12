@@ -249,24 +249,14 @@ class NotificationNormalizer {
     Map<String, dynamic> additionalData, {
     required String title,
   }) {
-    final aps = merged['aps'];
-    final apsMap = aps is Map
-        ? Map<String, dynamic>.from(aps)
-        : <String, dynamic>{};
     final custom = merged['custom'];
     final customMap = custom is Map
         ? Map<String, dynamic>.from(custom)
         : <String, dynamic>{};
     final candidates = <dynamic>[
-      merged['grp'],
-      additionalData['grp'],
-      merged['groupId'],
-      additionalData['groupId'],
-      merged['group_key'],
-      merged['group_id'],
-      merged['thread_id'],
-      apsMap['thread-id'],
-      customMap['collapse_id'],
+      merged['grp_id'],
+      additionalData['grp_id'],
+      customMap['grp_id'],
     ];
 
     for (final candidate in candidates) {
